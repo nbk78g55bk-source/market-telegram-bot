@@ -21,7 +21,7 @@ def send(text):
     r.raise_for_status()
 
 # =========================
-# Deine Kryptos
+# Deine Kryptos (EUR)
 # =========================
 MY_CRYPTOS = {
     "SOL": "solana",
@@ -37,7 +37,7 @@ def my_crypto_lines():
     ids = ",".join(MY_CRYPTOS.values())
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {
-        "vs_currency": "usd",
+        "vs_currency": "eur",
         "ids": ids,
         "order": "market_cap_desc",
         "per_page": 50,
@@ -58,16 +58,16 @@ def my_crypto_lines():
             continue
         price = c.get("current_price", 0)
         chg = c.get("price_change_percentage_24h", 0)
-        lines.append(f"• {sym}: ${price:.4f} | {chg:+.2f}% (24h)")
+        lines.append(f"• {sym}: €{price:.4f} | {chg:+.2f}% (24h)")
     return lines
 
 # =========================
-# Top 15 Kryptos
+# Top 15 Kryptos (EUR)
 # =========================
 def top15_crypto_lines():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {
-        "vs_currency": "usd",
+        "vs_currency": "eur",
         "order": "market_cap_desc",
         "per_page": 15,
         "page": 1,
@@ -92,7 +92,7 @@ def main():
     now = datetime.now(timezone.utc) + timedelta(hours=1)  # MEZ
     hour = now.hour
 
-    # manueller Start über GitHub Actions (Handy/iPad)
+    # Manuell gestartet (GitHub Actions – Handy/iPad)
     manual_run = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
 
     try:
@@ -106,7 +106,7 @@ def main():
         elif hour == 15:
             send(
                 "🧠 Geschäftspartner-Update (15:00)\n\n"
-                "📌 Kommt als Nächstes: Investment-Ideen & Research"
+                "📌 Kommt als Nächstes: Investment-Ideen & kurzes Research"
             )
 
         elif hour == 18:
