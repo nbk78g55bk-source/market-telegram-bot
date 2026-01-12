@@ -45,7 +45,7 @@ def main():
     manual_run = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
 
     try:
-        if hour == 12 or force == "midday":
+        if hour == 12 or manual_run:
             lines = ["🕛 Markt-Mittagsupdate (12:00)", ""]
             lines += top15_crypto_lines()
             send("\n".join(lines))
