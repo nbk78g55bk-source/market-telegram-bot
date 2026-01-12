@@ -120,18 +120,29 @@ def mark_ran(state, marker: str):
 # =========================
 def get_with_retry(url, params=None, timeout=25, tries=3, backoff=2):
     last_exc = None
+    last_status = None
+
     for i in range(tries):
         try:
             r = requests.get(url, params=params, timeout=timeout)
+            last_status = r.status_code
+
             if r.status_code == 429:
-                # Rate limit → warten und nochmal
+                # Rate limit → warten und erneut versuchen
                 time.sleep(backoff * (i + 1))
+                last_exc = RuntimeError(f"HTTP 429 Too Many Requests for {url}")
                 continue
+
             r.raise_for_status()
             return r
+
         except Exception as e:
             last_exc = e
             time.sleep(backoff * (i + 1))
+
+    # Wenn wir hier landen, hatten wir nur 429 oder wiederholte Fehler
+    if last_exc is None:
+        raise RuntimeError(f"Request failed for {url} (last_status={last_status})")
     raise last_exc
 
 # =========================
