@@ -23,8 +23,6 @@ def main():
         send("🧠 Geschäftspartner-Update\n\n(Test – Research kommt später)")
     elif hour == 18:
         send("🕕 Tagesabschluss\n\n(Test – Tagesrecap kommt später)")
-    else:
-        send("🤖 Bot-Heartbeat (alles läuft)")
 
 if __name__ == "__main__":
     main()
