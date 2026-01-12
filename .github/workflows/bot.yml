@@ -2,7 +2,7 @@ name: Market Telegram Bot
 
 on:
   schedule:
-    - cron: "* * * * *"   # jede Minute
+    - cron: "*/5 * * * *"   # alle 5 Minuten
   workflow_dispatch:
 
 jobs:
@@ -11,6 +11,14 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Restore state cache
+        uses: actions/cache@v4
+        with:
+          path: state.json
+          key: state-cache
+          restore-keys: |
+            state-cache
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,3 +37,9 @@ jobs:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           python bot.py
+
+      - name: Save state cache
+        uses: actions/cache@v4
+        with:
+          path: state.json
+          key: state-cache
