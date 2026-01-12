@@ -175,14 +175,33 @@ def top15_crypto_lines():
 # FX USD→EUR (for Finnhub US quotes)
 # =========================
 def usd_to_eur_rate():
-    r = get_with_retry(
-        "https://api.exchangerate.host/latest",
-        params={"base": "USD", "symbols": "EUR"},
+    # 1) Versuch: exchangerate.host
+    try:
+        r = get_with_retry(
+            "https://api.exchangerate.host/latest",
+            params={"base": "USD", "symbols": "EUR"},
+            timeout=25,
+            tries=2,
+            backoff=2
+        ).json()
+        if isinstance(r, dict) and "rates" in r and "EUR" in r["rates"]:
+            return float(r["rates"]["EUR"])
+    except Exception:
+        pass
+
+    # 2) Fallback: frankfurter.app (ECB-basiert)
+    r2 = get_with_retry(
+        "https://api.frankfurter.app/latest",
+        params={"from": "USD", "to": "EUR"},
         timeout=25,
         tries=3,
         backoff=2
     ).json()
-    return r["rates"]["EUR"]
+
+    if "rates" in r2 and "EUR" in r2["rates"]:
+        return float(r2["rates"]["EUR"])
+
+    raise RuntimeError("FX rate USD->EUR not available")
 
 # =========================
 # Finnhub Quotes (PRIMARY)
