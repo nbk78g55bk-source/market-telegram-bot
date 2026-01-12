@@ -26,6 +26,7 @@ RUMOR_WORDS = [
     "sources said", "people familiar", "unconfirmed"
 ]
 
+# Deine Assets
 MY_CRYPTOS = {
     "SOL": "solana",
     "ADA": "cardano",
@@ -35,20 +36,33 @@ MY_CRYPTOS = {
     "FET": "fetch-ai",
     "RNDR": "render-token"
 }
-MY_STOCKS = ["UAA"]
+MY_STOCKS = ["UAA"]  # Under Armour
 
+# Top-25 Aktien (praktisch)
 TOP25 = [
     "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO",
     "JPM","V","WMT","XOM","UNH","MA","PG","JNJ","HD","ORCL",
     "COST","MRK","BAC","KO","PEP"
 ]
 
+# Schwellen: Big-News-Alerts (Impact)
 STOCK_POS = 7.0
 STOCK_NEG = -7.0
 CRYPTO_POS = 6.0
 CRYPTO_NEG = -6.0
 
+# 15:00 Empfehlungen: etwas "normalere" Schwellen, aber NUR mit NEWS
+STOCK_IDEA_POS = 4.0
+STOCK_IDEA_NEG = -4.0
+CRYPTO_IDEA_POS = 4.0
+CRYPTO_IDEA_NEG = -4.0
+
 TRIGGER_WINDOW_MINUTES = 5  # runs every 5 min → window 0-4
+
+# Finnhub nutzt bei einigen Tickers Punkte statt Bindestriche
+SYMBOL_MAP = {
+    "BRK-B": "BRK.B"
+}
 
 # =========================
 # Telegram
@@ -104,6 +118,9 @@ def purge_seen_news(state, ttl_hours=48):
 # =========================
 # Helpers
 # =========================
+def normalize_symbol(sym: str) -> str:
+    return SYMBOL_MAP.get(sym, sym)
+
 def is_rumor(text: str):
     t = (text or "").lower()
     return any(w in t for w in RUMOR_WORDS)
@@ -172,10 +189,10 @@ def top15_crypto_lines():
     return lines, data
 
 # =========================
-# FX USD→EUR (for Finnhub US quotes)
+# FX USD→EUR
 # =========================
 def usd_to_eur_rate():
-    # 1) Versuch: exchangerate.host
+    # 1) exchangerate.host
     try:
         r = get_with_retry(
             "https://api.exchangerate.host/latest",
@@ -189,7 +206,7 @@ def usd_to_eur_rate():
     except Exception:
         pass
 
-    # 2) Fallback: frankfurter.app (ECB-basiert)
+    # 2) frankfurter.app
     r2 = get_with_retry(
         "https://api.frankfurter.app/latest",
         params={"from": "USD", "to": "EUR"},
@@ -197,20 +214,18 @@ def usd_to_eur_rate():
         tries=3,
         backoff=2
     ).json()
-
     if "rates" in r2 and "EUR" in r2["rates"]:
         return float(r2["rates"]["EUR"])
 
     raise RuntimeError("FX rate USD->EUR not available")
 
 # =========================
-# Finnhub Quotes (PRIMARY)
+# Finnhub Quotes (Aktien)
 # =========================
 def finnhub_quote(symbol: str):
     url = "https://finnhub.io/api/v1/quote"
     params = {"symbol": symbol, "token": FINNHUB_KEY}
     r = get_with_retry(url, params=params, timeout=25, tries=3, backoff=2).json()
-    # Finnhub fields: c=current, pc=prev close
     c = r.get("c")
     pc = r.get("pc")
     if c is None or pc in (None, 0):
@@ -218,86 +233,36 @@ def finnhub_quote(symbol: str):
     chg_pct = ((c - pc) / pc) * 100.0
     return {"symbol": symbol, "price_usd": c, "chg_pct": chg_pct}
 
-def get_stock_quotes_primary(symbols):
-    # One FX fetch per run
+def get_stock_quotes(symbols):
     fx = usd_to_eur_rate()
     out = []
     for sym in symbols:
-        q = finnhub_quote(sym)
+        fsym = normalize_symbol(sym)
+        q = finnhub_quote(fsym)
         if not q:
             continue
         out.append({
-            "symbol": sym,
+            "symbol": sym,          # keep original symbol for display (BRK-B)
+            "finnhub_symbol": fsym, # internal
             "price_eur": q["price_usd"] * fx,
             "chg_pct": q["chg_pct"]
         })
     return out
 
-# =========================
-# Yahoo fallback (SECONDARY)
-# =========================
-def yahoo_quotes(symbols):
-    url = "https://query1.finance.yahoo.com/v7/finance/quote"
-    params = {"symbols": ",".join(symbols)}
-    r = get_with_retry(url, params=params, timeout=25, tries=2, backoff=5)
-    return r.json()["quoteResponse"]["result"]
-
-def fallback_stock_quotes(symbols):
-    # returns list of dicts: symbol, price_eur?, chg_pct
-    try:
-        raw = yahoo_quotes(symbols)
-    except Exception:
-        return []
-
-    quotes = []
-    # FX only if USD
-    fx = None
-    for q in raw:
-        sym = q.get("symbol")
-        if sym not in symbols:
-            continue
-        price = q.get("regularMarketPrice")
-        chg = q.get("regularMarketChangePercent") or 0.0
-        cur = q.get("currency", "USD")
-        if price is None:
-            continue
-        if cur == "USD":
-            if fx is None:
-                fx = usd_to_eur_rate()
-            price = price * fx
-        quotes.append({"symbol": sym, "price_eur": price, "chg_pct": chg})
-    return quotes
-
-def get_stock_quotes(symbols):
-    primary = get_stock_quotes_primary(symbols)
-    have = {q["symbol"] for q in primary}
-    missing = [s for s in symbols if s not in have]
-    if missing:
-        primary += fallback_stock_quotes(missing)
-    return primary
-
-# =========================
-# Stock lines / highlights
-# =========================
-def my_stock_lines(stock_quotes):
-    lines = ["📦 Deine Aktie"]
-    q = next((x for x in stock_quotes if x["symbol"] == "UAA"), None)
-    if not q:
-        lines.append("• Under Armour (UAA): keine Daten")
-        return lines
-    lines.append(f"• Under Armour (UAA): €{q['price_eur']:.2f} | {q['chg_pct']:+.2f}%")
-    return lines
-
-def top25_highlights(stock_quotes):
-    lines = ["🏢 Top 25 Aktien – Highlights"]
-    filtered = [q for q in stock_quotes if q["symbol"] in TOP25]
-    movers = sorted(filtered, key=lambda x: abs(x["chg_pct"]), reverse=True)[:5]
-    for q in movers:
-        lines.append(f"• {q['symbol']}: {q['chg_pct']:+.2f}%")
-    return lines
-
 def stock_move_map(stock_quotes):
     return {q["symbol"]: q["chg_pct"] for q in stock_quotes}
+
+# =========================
+# Finnhub Company Name (nur für die, die wir anzeigen)
+# =========================
+def finnhub_company_name(symbol: str):
+    fsym = normalize_symbol(symbol)
+    url = "https://finnhub.io/api/v1/stock/profile2"
+    params = {"symbol": fsym, "token": FINNHUB_KEY}
+    data = get_with_retry(url, params=params, timeout=25, tries=3, backoff=2).json()
+    # Finnhub liefert oft "name"
+    name = (data.get("name") or data.get("ticker") or "").strip()
+    return name if name else symbol
 
 # =========================
 # Finnhub News
@@ -305,13 +270,57 @@ def stock_move_map(stock_quotes):
 def finnhub_market_news():
     url = "https://finnhub.io/api/v1/news"
     params = {"category": "general", "token": FINNHUB_KEY}
-    r = get_with_retry(url, params=params, timeout=25, tries=3, backoff=2).json()
-    return r[:50]
+    return get_with_retry(url, params=params, timeout=25, tries=3, backoff=2).json()[:50]
 
 # =========================
-# Big News Alerts
+# Display helpers (Namen)
 # =========================
-def detect_big_news_alerts(state, stock_quotes, top_crypto_list):
+def fmt_stock_name(symbol: str, name_cache: dict):
+    if symbol not in name_cache:
+        try:
+            name_cache[symbol] = finnhub_company_name(symbol)
+        except Exception:
+            name_cache[symbol] = symbol
+    return f"{name_cache[symbol]} ({symbol})"
+
+# =========================
+# Reports (12/18)
+# =========================
+def my_stock_lines(stock_quotes, name_cache):
+    lines = ["📦 Deine Aktie"]
+    q = next((x for x in stock_quotes if x["symbol"] == "UAA"), None)
+    if not q:
+        lines.append("• Under Armour (UAA): keine Daten")
+        return lines
+    nm = fmt_stock_name("UAA", name_cache)
+    lines.append(f"• {nm}: €{q['price_eur']:.2f} | {q['chg_pct']:+.2f}%")
+    return lines
+
+def top25_highlights(stock_quotes, name_cache):
+    lines = ["🏢 Top 25 Aktien – Highlights"]
+    filtered = [q for q in stock_quotes if q["symbol"] in TOP25]
+    movers = sorted(filtered, key=lambda x: abs(x["chg_pct"]), reverse=True)[:5]
+    for q in movers:
+        nm = fmt_stock_name(q["symbol"], name_cache)
+        lines.append(f"• {nm}: {q['chg_pct']:+.2f}%")
+    return lines
+
+def build_market_report(title: str, stock_quotes, name_cache):
+    top_lines, _ = top15_crypto_lines()
+    lines = [title, ""]
+    lines += my_crypto_lines()
+    lines.append("")
+    lines += my_stock_lines(stock_quotes, name_cache)
+    lines.append("")
+    lines += top_lines
+    lines.append("")
+    lines += top25_highlights(stock_quotes, name_cache)
+    return "\n".join(lines)
+
+# =========================
+# Big News Alerts (confirmed + impact + cooldown)
+# =========================
+def detect_big_news_alerts(state, stock_quotes, top_crypto_list, name_cache):
     alerts = []
     stock_move = stock_move_map(stock_quotes)
     top_crypto_move = {(c.get("symbol") or "").upper(): (c.get("price_change_percentage_24h") or 0.0) for c in top_crypto_list}
@@ -337,13 +346,18 @@ def detect_big_news_alerts(state, stock_quotes, top_crypto_list):
             if sym.lower() in text:
                 mentioned = sym
                 break
+
         if not mentioned:
             for sym in list(top_crypto_move.keys()):
                 if sym.lower() in text:
                     mentioned = sym
                     break
+
         if not mentioned:
             continue
+
+        # mark seen
+        state.setdefault("seen_news", {})[fp] = now_ts()
 
         move_val = 0.0
         impact_ok = False
@@ -354,9 +368,6 @@ def detect_big_news_alerts(state, stock_quotes, top_crypto_list):
             move_val = top_crypto_move.get(mentioned, 0.0)
             impact_ok = (move_val >= CRYPTO_POS) or (move_val <= CRYPTO_NEG)
 
-        # markieren, damit wir denselben Artikel nicht immer neu scannen
-        state.setdefault("seen_news", {})[fp] = now_ts()
-
         if not impact_ok:
             continue
 
@@ -365,9 +376,14 @@ def detect_big_news_alerts(state, stock_quotes, top_crypto_list):
             continue
 
         direction = "📈" if move_val > 0 else "📉"
+        if mentioned in stock_move:
+            label = fmt_stock_name(mentioned, name_cache)
+        else:
+            label = mentioned
+
         alerts.append(
             f"🚨 BIG NEWS (confirmed)\n"
-            f"{direction} {mentioned}: {move_val:+.2f}%\n"
+            f"{direction} {label}: {move_val:+.2f}%\n"
             f"{headline}\n"
             f"Quelle: {source}\n"
             f"{url}"
@@ -378,71 +394,147 @@ def detect_big_news_alerts(state, stock_quotes, top_crypto_list):
     return alerts
 
 # =========================
-# 15:00 Geschäftspartner (max 3 Ideen, 50/50)
+# 15:00 Geschäftspartner (Kaufen / Nicht kaufen) + Haltedauer
 # =========================
-def partner_message(stock_quotes, top_crypto_list):
-    lines = ["🧠 Geschäftspartner-Update (15:00)", "", "⚠️ Keine Finanzberatung – nur Research/Ideen.", ""]
+def estimate_horizon(headline: str) -> str:
+    h = (headline or "").lower()
+    # einfache, praxisnahe Heuristik
+    if any(k in h for k in ["contract", "order", "award", "auftrag", "grossauftrag", "deal", "tender", "agreement"]):
+        return "ca. 3–9 Monate"
+    if any(k in h for k in ["earnings", "guidance", "results", "quartal", "q1", "q2", "q3", "q4"]):
+        return "ca. 1–3 Monate"
+    if any(k in h for k in ["approval", "sec", "etf", "regulator", "zulassung", "genehmigung"]):
+        return "ca. 1–6 Monate"
+    if any(k in h for k in ["lawsuit", "probe", "investigation", "klage", "untersuchung"]):
+        return "kurzfristig (Tage–Wochen)"
+    return "ca. 2–8 Wochen"
 
-    # Stocks: moderate positive movers
-    stocks = [q for q in stock_quotes if (q["symbol"] in TOP25 or q["symbol"] in MY_STOCKS) and 1.0 <= q["chg_pct"] <= 8.5]
-    stocks.sort(key=lambda x: x["chg_pct"], reverse=True)
+def partner_update(state, stock_quotes, top_crypto_list, name_cache):
+    """
+    Nur Empfehlungen, wenn:
+    - confirmed News vorhanden
+    - UND Kursimpact sichtbar
+    Sonst: "nichts kaufenswert"
+    """
+    stock_move = stock_move_map(stock_quotes)
+    top_crypto_move = {(c.get("symbol") or "").upper(): (c.get("price_change_percentage_24h") or 0.0) for c in top_crypto_list}
 
-    # Crypto: moderate positive movers
-    cryptos = []
-    for c in top_crypto_list:
-        sym = (c.get("symbol") or "").upper()
-        name = c.get("name", sym)
-        chg = c.get("price_change_percentage_24h") or 0.0
-        if 1.0 <= chg <= 10.0:
-            cryptos.append((sym, name, chg))
-    cryptos.sort(key=lambda x: x[2], reverse=True)
+    # Kandidaten aus News: maximal 2 Ideen
+    picks = []
 
-    ideas = []
-    for s in stocks[:2]:
-        ideas.append(("Aktie", s["symbol"], s["chg_pct"],
-                      "Momentum + Markt bestätigt den Move (ohne extremen Zock).",
-                      "Kann nach starkem Tag konsolidieren; Positionsgröße klein halten."))
+    for item in finnhub_market_news():
+        headline = (item.get("headline") or "").strip()
+        url = (item.get("url") or "").strip()
+        source = (item.get("source") or "").strip()
 
-    if cryptos:
-        sym, name, chg = cryptos[0]
-        ideas.append(("Krypto", sym, chg,
-                      "Relative Stärke im Top-Segment + Trend im Gesamtmarkt.",
-                      "Krypto bleibt volatil; Stop/Plan vorher festlegen."))
+        if not headline or is_rumor(headline):
+            continue
 
-    ideas = ideas[:3]
-    if not ideas:
-        lines.append("Heute keine sauberen Setups (zu wenig klare Signale ohne Zock).")
+        text = headline.lower()
+
+        mentioned = None
+        is_stock = False
+
+        for sym in (MY_STOCKS + TOP25):
+            if sym.lower() in text:
+                mentioned = sym
+                is_stock = True
+                break
+
+        if not mentioned:
+            for sym in list(top_crypto_move.keys()):
+                if sym.lower() in text:
+                    mentioned = sym
+                    is_stock = False
+                    break
+
+        if not mentioned:
+            continue
+
+        # Impact check (moderater, aber trotzdem spürbar)
+        move_val = 0.0
+        impact_ok = False
+        if is_stock:
+            move_val = stock_move.get(mentioned, 0.0)
+            impact_ok = (move_val >= STOCK_IDEA_POS) or (move_val <= STOCK_IDEA_NEG)
+        else:
+            move_val = top_crypto_move.get(mentioned, 0.0)
+            impact_ok = (move_val >= CRYPTO_IDEA_POS) or (move_val <= CRYPTO_IDEA_NEG)
+
+        if not impact_ok:
+            continue
+
+        # Cooldown pro Asset für Partner-Ideen (damit’s nicht jeden Tag gleich ist)
+        key = f"partner:{mentioned}"
+        if not cooldown_ok(state, key):
+            continue
+
+        horizon = estimate_horizon(headline)
+        direction = "positiv" if move_val > 0 else "negativ"
+
+        if move_val > 0:
+            decision = "✅ KAUFEN (Idee)"
+            risk = "Risiko: News kann eingepreist sein; Rücksetzer möglich. Positionsgröße klein halten."
+        else:
+            decision = "❌ NICHT KAUFEN"
+            risk = "Risiko: Abwärtstrend/Unsicherheit; lieber abwarten, bis Lage klarer ist."
+
+        if is_stock:
+            label = fmt_stock_name(mentioned, name_cache)
+        else:
+            label = mentioned
+
+        picks.append({
+            "label": label,
+            "move": move_val,
+            "headline": headline,
+            "source": source,
+            "url": url,
+            "decision": decision,
+            "horizon": horizon,
+            "direction": direction,
+            "risk": risk
+        })
+
+        mark_alert(state, key)
+
+        if len(picks) >= 2:
+            break
+
+    lines = ["🧠 Geschäftspartner-Update (15:00)", "⚠️ Keine Finanzberatung – nur Research/Ideen.", ""]
+
+    if not picks:
+        lines.append("❌ Heute keine kaufenswerten Aktien oder Kryptos.")
+        lines.append("• Grund: Keine bestätigten News mit sauberem Chance/Risiko + klarer Marktreaktion.")
         return "\n".join(lines)
 
-    for i, (typ, sym, chg, why, risk) in enumerate(ideas, start=1):
-        lines.append(f"📌 Idee {i}: {sym} – {typ}")
-        lines.append(f"• Bewegung: {chg:+.2f}%")
-        lines.append(f"• Warum: {why}")
-        lines.append(f"• Risiko: {risk}")
+    for i, p in enumerate(picks, start=1):
+        lines.append(f"📌 Entscheidung {i}: {p['decision']}")
+        lines.append(f"• Asset: {p['label']}")
+        lines.append(f"• Marktreaktion: {p['move']:+.2f}%")
+        lines.append(f"• Begründung (News): {p['headline']}")
+        lines.append(f"• Haltedauer-Schätzung: {p['horizon']}")
+        lines.append(f"• Quelle: {p['source']}")
+        lines.append(f"• Link: {p['url']}")
+        lines.append(f"• {p['risk']}")
         lines.append("")
+
     return "\n".join(lines).strip()
 
 # =========================
-# Reports
+# Probelauf (manuell)
 # =========================
-def build_market_report(title: str, stock_quotes):
-    top_lines, top_crypto = top15_crypto_lines()
-    lines = [title, ""]
-    lines += my_crypto_lines()
-    lines.append("")
-    lines += my_stock_lines(stock_quotes)
-    lines.append("")
-    lines += top_lines
-    lines.append("")
-    lines += top25_highlights(stock_quotes)
-    return "\n".join(lines), top_crypto
-
 def run_probelauf(state):
+    name_cache = {}
+
     stock_quotes = get_stock_quotes(TOP25 + MY_STOCKS)
-    report, top_crypto = build_market_report("🧪 PROBELAUF – Marktbericht (wie 12/18 Uhr)", stock_quotes)
+    report = build_market_report("🧪 PROBELAUF – Marktbericht (wie 12/18 Uhr)", stock_quotes, name_cache)
     send(report)
-    send(partner_message(stock_quotes, top_crypto))
-    alerts = detect_big_news_alerts(state, stock_quotes, top_crypto)
+
+    _, top_crypto = top15_crypto_lines()
+    send(partner_update(state, stock_quotes, top_crypto, name_cache))
+
+    alerts = detect_big_news_alerts(state, stock_quotes, top_crypto, name_cache)
     if alerts:
         send("🧪 PROBELAUF – BIG NEWS ALERTS\n\n" + "\n\n---\n\n".join(alerts[:3]))
     else:
@@ -460,27 +552,29 @@ def main():
     manual = EVENT_NAME == "workflow_dispatch"
 
     try:
+        # Manuell: echter Probelauf
         if manual:
             run_probelauf(state)
             save_state(state)
             return
 
-        # every 15 min: big news scan
+        name_cache = {}
+
+        # alle 15 Min Big News
         if minute % 15 == 0:
             stock_quotes = get_stock_quotes(TOP25 + MY_STOCKS)
             _, top_crypto = top15_crypto_lines()
-            alerts = detect_big_news_alerts(state, stock_quotes, top_crypto)
+            alerts = detect_big_news_alerts(state, stock_quotes, top_crypto, name_cache)
             if alerts:
                 send("🚨 BIG NEWS ALERTS\n\n" + "\n\n---\n\n".join(alerts[:3]))
 
-        # 12/15/18 within minute 0-4
+        # 12/15/18 innerhalb minute 0-4
         if minute < TRIGGER_WINDOW_MINUTES:
             if hour == 12:
                 mk = run_marker_key("midday", dt_local)
                 if not already_ran(state, mk):
                     stock_quotes = get_stock_quotes(TOP25 + MY_STOCKS)
-                    report, _ = build_market_report("🕛 Markt-Mittagsupdate (12:00)", stock_quotes)
-                    send(report)
+                    send(build_market_report("🕛 Markt-Mittagsupdate (12:00)", stock_quotes, name_cache))
                     mark_ran(state, mk)
 
             elif hour == 15:
@@ -488,15 +582,14 @@ def main():
                 if not already_ran(state, mk):
                     stock_quotes = get_stock_quotes(TOP25 + MY_STOCKS)
                     _, top_crypto = top15_crypto_lines()
-                    send(partner_message(stock_quotes, top_crypto))
+                    send(partner_update(state, stock_quotes, top_crypto, name_cache))
                     mark_ran(state, mk)
 
             elif hour == 18:
                 mk = run_marker_key("evening", dt_local)
                 if not already_ran(state, mk):
                     stock_quotes = get_stock_quotes(TOP25 + MY_STOCKS)
-                    report, _ = build_market_report("🕕 Tagesabschluss (18:00)", stock_quotes)
-                    send(report)
+                    send(build_market_report("🕕 Tagesabschluss (18:00)", stock_quotes, name_cache))
                     mark_ran(state, mk)
 
         save_state(state)
