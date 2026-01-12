@@ -2,6 +2,21 @@ import os
 import requests
 from datetime import datetime, timezone, timedelta
 
+TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+
+def send(text):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    r = requests.post(
+        url,
+        json={
+            "chat_id": CHAT_ID,
+            "text": text,
+            "disable_web_page_preview": True
+        }
+    )
+    r.raise_for_status()
+
 def top15_crypto_lines():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {
@@ -23,31 +38,32 @@ def top15_crypto_lines():
         lines.append(f"• {name} ({sym}): {chg:+.2f}% (24h)")
     return lines
 
-TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-
-def send(text):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, json={
-        "chat_id": CHAT_ID,
-        "text": text,
-        "disable_web_page_preview": True
-    })
-
 def main():
-    now = datetime.now(timezone.utc) + timedelta(hours=1)  # MEZ
+    now = datetime.now(timezone.utc) + timedelta(hours=1)
     hour = now.hour
 
-    if hour == 12:
-    lines = ["🕛 Markt-Mittagsupdate (12:00)", ""]
-    lines += top15_crypto_lines()
-    send("\n".join(lines))
-    elif hour == 15:
-        send("🧠 Geschäftspartner-Update\n\n(Test – Research kommt später)")
-    elif hour == 18:
-    lines = ["🕕 Tagesabschluss (18:00)", ""]
-    lines += top15_crypto_lines()
-    send("\n".join(lines))
+    force = os.environ.get("FORCE_REPORT", "").strip().lower()
+
+    try:
+        if hour == 12 or force == "midday":
+            lines = ["🕛 Markt-Mittagsupdate (12:00)", ""]
+            lines += top15_crypto_lines()
+            send("\n".join(lines))
+
+        elif hour == 15 or force == "partner":
+            send("🧠 Geschäftspartner-Update (15:00)\n\n(kommt als nächstes)")
+
+        elif hour == 18 or force == "evening":
+            lines = ["🕕 Tagesabschluss (18:00)", ""]
+            lines += top15_crypto_lines()
+            send("\n".join(lines))
+
+        else:
+            return
+
+    except Exception as e:
+        send(f"⚠️ Bot-Fehler:\n{type(e).__name__}: {e}")
+        return
 
 if __name__ == "__main__":
     main()
