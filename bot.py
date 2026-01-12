@@ -86,13 +86,78 @@ def top15_crypto_lines():
     return lines
 
 # =========================
+# Aktien – Under Armour (EUR)
+# =========================
+def under_armour_lines():
+    # Yahoo Finance Quote API
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    params = {"symbols": "UAA"}
+    r = requests.get(url, params=params, timeout=20)
+    r.raise_for_status()
+    res = r.json()["quoteResponse"]["result"]
+
+    lines = ["📦 Deine Aktie"]
+    if not res:
+        lines.append("• Under Armour (UAA): keine Daten")
+        return lines
+
+    q = res[0]
+    price = q.get("regularMarketPrice")
+    chg = q.get("regularMarketChangePercent")
+    currency = q.get("currency", "USD")
+
+    # einfache USD→EUR Umrechnung (Fallback, falls EUR nicht geliefert wird)
+    if currency == "USD":
+        fx = requests.get(
+            "https://api.exchangerate.host/latest",
+            params={"base": "USD", "symbols": "EUR"},
+            timeout=20
+        ).json()["rates"]["EUR"]
+        price = price * fx
+        currency = "EUR"
+
+    lines.append(f"• Under Armour (UAA): €{price:.2f} | {chg:+.2f}% (24h)")
+    return lines
+
+# =========================
+# Top 25 Aktien (Market Cap – Highlights)
+# =========================
+TOP25 = [
+    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO",
+    "JPM","V","WMT","XOM","UNH","MA","PG","JNJ","HD","ORCL",
+    "COST","MRK","BAC","KO","PEP"
+]
+
+def top25_stock_lines():
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    params = {"symbols": ",".join(TOP25)}
+    r = requests.get(url, params=params, timeout=20)
+    r.raise_for_status()
+    res = r.json()["quoteResponse"]["result"]
+
+    lines = ["🏢 Top 25 Aktien – Highlights"]
+    # sortiere nach absoluter Tagesbewegung
+    res_sorted = sorted(
+        res,
+        key=lambda x: abs(x.get("regularMarketChangePercent") or 0),
+        reverse=True
+    )[:5]
+
+    for q in res_sorted:
+        sym = q.get("symbol")
+        name = q.get("shortName", sym)
+        chg = q.get("regularMarketChangePercent", 0)
+        lines.append(f"• {name} ({sym}): {chg:+.2f}%")
+    return lines
+
+# =========================
 # Main Logic
 # =========================
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=1)  # MEZ
     hour = now.hour
 
-    # Manuell gestartet (GitHub Actions – Handy/iPad)
+    # manueller Start (Handy/iPad)
     manual_run = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
 
     try:
@@ -100,20 +165,28 @@ def main():
             lines = ["🕛 Markt-Mittagsupdate (12:00)", ""]
             lines += my_crypto_lines()
             lines.append("")
+            lines += under_armour_lines()
+            lines.append("")
             lines += top15_crypto_lines()
+            lines.append("")
+            lines += top25_stock_lines()
             send("\n".join(lines))
 
         elif hour == 15:
             send(
                 "🧠 Geschäftspartner-Update (15:00)\n\n"
-                "📌 Kommt als Nächstes: Investment-Ideen & kurzes Research"
+                "📌 Als Nächstes: konkrete Aktien- & Krypto-Ideen mit Begründung"
             )
 
         elif hour == 18:
             lines = ["🕕 Tagesabschluss (18:00)", ""]
             lines += my_crypto_lines()
             lines.append("")
+            lines += under_armour_lines()
+            lines.append("")
             lines += top15_crypto_lines()
+            lines.append("")
+            lines += top25_stock_lines()
             send("\n".join(lines))
 
         else:
