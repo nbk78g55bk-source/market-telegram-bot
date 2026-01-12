@@ -42,7 +42,7 @@ def main():
     now = datetime.now(timezone.utc) + timedelta(hours=1)
     hour = now.hour
 
-    force = os.environ.get("FORCE_REPORT", "").strip().lower()
+    manual_run = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
 
     try:
         if hour == 12 or force == "midday":
