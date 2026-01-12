@@ -12,16 +12,12 @@ def send(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     r = requests.post(
         url,
-        json={
-            "chat_id": CHAT_ID,
-            "text": text,
-            "disable_web_page_preview": True
-        }
+        json={"chat_id": CHAT_ID, "text": text, "disable_web_page_preview": True}
     )
     r.raise_for_status()
 
 # =========================
-# Deine Kryptos (EUR)
+# Kryptos (EUR)
 # =========================
 MY_CRYPTOS = {
     "SOL": "solana",
@@ -47,7 +43,6 @@ def my_crypto_lines():
     r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
     data = r.json()
-
     by_id = {c["id"]: c for c in data}
 
     lines = ["📦 Deine Kryptos"]
@@ -61,9 +56,6 @@ def my_crypto_lines():
         lines.append(f"• {sym}: €{price:.4f} | {chg:+.2f}% (24h)")
     return lines
 
-# =========================
-# Top 15 Kryptos (EUR)
-# =========================
 def top15_crypto_lines():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {
@@ -86,108 +78,94 @@ def top15_crypto_lines():
     return lines
 
 # =========================
-# Aktien – Under Armour (EUR)
-# =========================
-def under_armour_lines():
-    # Yahoo Finance Quote API
-    url = "https://query1.finance.yahoo.com/v7/finance/quote"
-    params = {"symbols": "UAA"}
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    res = r.json()["quoteResponse"]["result"]
-
-    lines = ["📦 Deine Aktie"]
-    if not res:
-        lines.append("• Under Armour (UAA): keine Daten")
-        return lines
-
-    q = res[0]
-    price = q.get("regularMarketPrice")
-    chg = q.get("regularMarketChangePercent")
-    currency = q.get("currency", "USD")
-
-    # einfache USD→EUR Umrechnung (Fallback, falls EUR nicht geliefert wird)
-    if currency == "USD":
-        fx = requests.get(
-            "https://api.exchangerate.host/latest",
-            params={"base": "USD", "symbols": "EUR"},
-            timeout=20
-        ).json()["rates"]["EUR"]
-        price = price * fx
-        currency = "EUR"
-
-    lines.append(f"• Under Armour (UAA): €{price:.2f} | {chg:+.2f}% (24h)")
-    return lines
-
-# =========================
-# Top 25 Aktien (Market Cap – Highlights)
+# Aktien (Yahoo) – 1 Request
 # =========================
 TOP25 = [
     "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO",
     "JPM","V","WMT","XOM","UNH","MA","PG","JNJ","HD","ORCL",
     "COST","MRK","BAC","KO","PEP"
 ]
+MY_STOCKS = ["UAA"]
 
-def top25_stock_lines():
+def yahoo_quotes(symbols):
     url = "https://query1.finance.yahoo.com/v7/finance/quote"
-    params = {"symbols": ",".join(TOP25)}
+    params = {"symbols": ",".join(symbols)}
     r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
-    res = r.json()["quoteResponse"]["result"]
+    return r.json()["quoteResponse"]["result"]
 
+def usd_to_eur(usd):
+    fx = requests.get(
+        "https://api.exchangerate.host/latest",
+        params={"base": "USD", "symbols": "EUR"},
+        timeout=20
+    ).json()["rates"]["EUR"]
+    return usd * fx
+
+def under_armour_lines_from_quotes(quotes):
+    lines = ["📦 Deine Aktie"]
+    q = next((x for x in quotes if x.get("symbol") == "UAA"), None)
+    if not q:
+        lines.append("• Under Armour (UAA): keine Daten")
+        return lines
+
+    price = q.get("regularMarketPrice")
+    chg = q.get("regularMarketChangePercent") or 0.0
+    currency = q.get("currency", "USD")
+
+    if currency == "USD" and price is not None:
+        price = usd_to_eur(price)
+
+    if price is None:
+        lines.append("• Under Armour (UAA): keine Daten")
+    else:
+        lines.append(f"• Under Armour (UAA): €{price:.2f} | {chg:+.2f}% (24h)")
+    return lines
+
+def top25_stock_lines_from_quotes(quotes):
     lines = ["🏢 Top 25 Aktien – Highlights"]
-    # sortiere nach absoluter Tagesbewegung
-    res_sorted = sorted(
-        res,
-        key=lambda x: abs(x.get("regularMarketChangePercent") or 0),
-        reverse=True
-    )[:5]
-
-    for q in res_sorted:
+    filtered = [q for q in quotes if q.get("symbol") in TOP25]
+    movers = sorted(filtered, key=lambda x: abs(x.get("regularMarketChangePercent") or 0), reverse=True)[:5]
+    for q in movers:
         sym = q.get("symbol")
         name = q.get("shortName", sym)
-        chg = q.get("regularMarketChangePercent", 0)
+        chg = q.get("regularMarketChangePercent") or 0.0
         lines.append(f"• {name} ({sym}): {chg:+.2f}%")
     return lines
 
 # =========================
-# Main Logic
+# Main
 # =========================
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=1)  # MEZ
     hour = now.hour
 
-    # manueller Start (Handy/iPad)
-    manual_run = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    manual_run = event_name == "workflow_dispatch"
+
+    # ✅ Manuelle Runs: KEIN Yahoo, kein CoinGecko-Spam – nur Status
+    if manual_run:
+        send("✅ Workflow läuft.\n\n(Manueller Test: keine Markt-Abfragen, damit keine Rate-Limits entstehen.)")
+        return
 
     try:
-        if hour == 12 or manual_run:
-            lines = ["🕛 Markt-Mittagsupdate (12:00)", ""]
+        # Cron-Runs: echte Logik
+        if hour in (12, 18):
+            quotes = yahoo_quotes(TOP25 + MY_STOCKS)
+
+            title = "🕛 Markt-Mittagsupdate (12:00)" if hour == 12 else "🕕 Tagesabschluss (18:00)"
+            lines = [title, ""]
             lines += my_crypto_lines()
             lines.append("")
-            lines += under_armour_lines()
+            lines += under_armour_lines_from_quotes(quotes)
             lines.append("")
             lines += top15_crypto_lines()
             lines.append("")
-            lines += top25_stock_lines()
+            lines += top25_stock_lines_from_quotes(quotes)
             send("\n".join(lines))
 
         elif hour == 15:
-            send(
-                "🧠 Geschäftspartner-Update (15:00)\n\n"
-                "📌 Als Nächstes: konkrete Aktien- & Krypto-Ideen mit Begründung"
-            )
-
-        elif hour == 18:
-            lines = ["🕕 Tagesabschluss (18:00)", ""]
-            lines += my_crypto_lines()
-            lines.append("")
-            lines += under_armour_lines()
-            lines.append("")
-            lines += top15_crypto_lines()
-            lines.append("")
-            lines += top25_stock_lines()
-            send("\n".join(lines))
+            send("🧠 Geschäftspartner-Update (15:00)\n\n📌 Als Nächstes: Ideen + kurzes Research")
 
         else:
             return
